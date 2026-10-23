@@ -4,6 +4,16 @@
 
 RAG-MCP (Retrieval-Augmented Generation for Model Context Protocol) 是一个基于检索增强生成的智能工具选择框架。它通过语义相似度搜索，从大量 MCP 工具中自动选择与用户查询最相关的工具。
 
+Python实现流程：
+
+（1）打开主项目入口并运行 test_ai_mcp.py
+
+（2）内部启动 python_mcp_server/server.py
+
+（3）Python MCP Server 注册工具
+
+（4）Python MCP Client 通过 STDIO 调用工具
+
 ## 核心特性
 
 | 特性 | 描述 |
