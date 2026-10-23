@@ -1,0 +1,25 @@
+# Build output
+/build/
+/cmake-build-*/
+/out/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# IDE and editor state
+/.idea/
+/.vscode/
+
+# Runtime output and local secrets
+*.log
+logs/
+.env
+.env.*
+!.env.example
+
+# OS files
+Thumbs.db
+Desktop.ini

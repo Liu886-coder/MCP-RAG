@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "mcp-server": {
+      "command": "C:\\path\\to\\mcp-main\\build\\mcp_server.exe",
+      "args": [
+        "-l","C:\\path\\to\\mcp-main\\build\\logs",
+        "-p","C:\\path\\to\\mcp-main\\build\\plugins"
+      ],
+      "env": {
+        "CUSTOM_API_KEY_1": "your-api-key-here",
+        "CUSTOM_API_KEY_2": "your-api-key-here",
+        "SAVE_DIR": "/path/to/save/directory"
+      }
+    }
+  }
+}
