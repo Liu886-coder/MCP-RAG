@@ -1,217 +1,57 @@
-# MCP-RAG
+# RAG-MCP 使用指南
 
-一个结合 MCP 与 RAG 的工具调用项目，包含 C++ MCP Client、插件式 MCP Server、语义工具检索模块，以及用于快速体验完整调用流程的 Python MCP Server 和测试客户端。
+## 概述
 
-项目的 RAG 原理、组件说明、配置示例和 C++ 使用方式以 [RAG-MCP 使用指南](docs/rag-mcp-guide.md) 为主；插件开发方式见 [MCP 插件开发指南](docs/mcp-plugin-development.md)。
+RAG-MCP (Retrieval-Augmented Generation for Model Context Protocol) 是一个基于检索增强生成的智能工具选择框架。它通过语义相似度搜索，从大量 MCP 工具中自动选择与用户查询最相关的工具。
 
-## 工作流程
+## 核心特性
 
-```text
-用户问题
-  → 将问题向量化
-  → 在工具向量索引中按相似度检索候选工具
-  → 把候选工具提供给 LLM 选择
-  → MCP Client 通过 MCP 协议调用 MCP Server
-  → Server 执行工具并返回结果
-  → LLM 根据结果组织回答
-```
+| 特性 | 描述 |
+|------|------|
+| 语义搜索 | 基于向量相似度的工具检索 |
+| 向量缓存 | LRU 缓存减少 API 调用 |
+| 自动降级 | 服务不可用时返回全量工具 |
+| 工具验证 | 可选的工具可用性验证 |
+| 持久化 | 索引可保存到文件 |
 
-RAG 负责缩小候选工具范围；最终选择哪个候选工具由 LLM 根据用户问题和工具描述决定。Embedding 使用 DashScope API，工具相似度检索、缓存、索引持久化和降级行为详见 RAG 指南。
-
-## 主要目录
-
-- `mcp_client/`：C++ MCP 客户端、Agent 集成和 RAG 工具检索实现。
-- `mcp_server/`：C++ MCP Server、STDIO/SSE/HTTP Stream 传输及插件。
-- `python_mcp_server/`：Python MCP Server，可供 `test_ai_mcp.py` 在本地通过 STDIO 启动。
-- `test_ai_mcp.py`：连接 MCP Server、执行工具发现、RAG 检索和 LLM 工具调用的交互式测试脚本。
-- `examples/`：C++ RAG 和 Agent 集成示例。
-- `docs/`：RAG 使用和插件开发文档。
-
-## Python 快速体验
-
-在 PyCharm 选择 Python 3.10 或更新版本的解释器，并安装依赖：
-
-```bash
-python -m pip install -r python_mcp_server/requirements.txt
-```
-
-设置 `DASHSCOPE_API_KEY` 后运行 `test_ai_mcp.py`。可选设置 `DASHSCOPE_EMBEDDING_KEY`；未设置时脚本可复用 LLM API Key。脚本会启动 `python_mcp_server/server.py`，通过 MCP 获取工具列表，再进行 RAG 检索和模型工具调用。
-
-## 文档
-
-- [RAG-MCP 使用指南](docs/rag-mcp-guide.md)：RAG 架构、DashScope 配置、向量索引、缓存和降级机制。
-- [MCP 插件开发指南](docs/mcp-plugin-development.md)：C++ Server 插件开发。
-
----
-
-以下部分记录 C++ 实现的构建和调用示例；RAG-MCP 的完整说明请优先阅读上面的使用指南。
-
-## 项目结构
+## 架构
 
 ```
-mcp_standalone/
-├── CMakeLists.txt              # 根构建文件
-├── README.md
-├── common/                     # 公共组件（日志、类型定义）
-│   ├── include/agent_rpc/common/
-│   │   ├── types.h             # 通用类型定义
-│   │   └── logger.h            # 日志系统接口
-│   └── src/
-│       └── logger.cpp          # 日志实现
-├── mcp_client/                 # MCP 客户端库
-│   ├── include/agent_rpc/mcp/
-│   │   ├── mcp_client.h        # MCP 客户端接口（STDIO + SSE）
-│   │   ├── mcp_agent_integration.h  # AI Agent 集成辅助类
-│   │   └── rag/                # RAG-MCP 模块
-│   │       ├── embedding_service.h  # DashScope 向量化服务
-│   │       ├── embedding_cache.h    # LRU 向量缓存
-│   │       ├── vector_index.h       # 向量索引
-│   │       ├── tool_retriever.h     # 工具检索器
-│   │       └── tool_validator.h     # 工具验证器
-│   └── src/
-│       ├── mcp_client.cpp           # 客户端实现
-│       ├── mcp_tool_manager.cpp     # 工具管理器
-│       ├── mcp_agent_integration.cpp # Agent 集成
-│       └── rag/                     # RAG 实现
-├── mcp_server/                 # MCP 服务器（独立可执行程序）
-│   ├── src/
-│   │   ├── main.cpp            # 服务器入口
-│   │   ├── server/Server.{h,cpp}    # 核心服务器
-│   │   ├── transport/          # 传输层
-│   │   │   ├── StdioTransport  # 标准 I/O 传输
-│   │   │   ├── SseTransport    # SSE 传输
-│   │   │   └── HttpStreamTransport  # HTTP 流传输
-│   │   ├── interface/          # 接口定义
-│   │   │   ├── ITransport.h    # 传输接口
-│   │   │   └── PluginAPI.h     # 插件 API
-│   │   ├── loader/             # 插件加载器
-│   │   └── utils/              # 工具类
-│   ├── plugins/                # 内置插件
-│   │   ├── calculator/         # 计算器
-│   │   ├── weather/            # 天气查询
-│   │   ├── sleep/              # 延时工具
-│   │   ├── code-review/        # 代码审查
-│   │   ├── notification/       # 通知
-│   │   └── bacio-quote/        # 名言
-│   └── test/                   # 测试脚本
-├── examples/                   # 示例代码
-│   ├── rag_mcp_example.cpp
-│   └── ai_mcp_integration_example.cpp
-└── docs/                       # 文档
-    ├── mcp-plugin-development.md
-    └── rag-mcp-guide.md
-```
-
-## 核心组件
-
-### 1. MCP 客户端 (`mcp_client`)
-
-MCP Client负责“发起调用”，MCP Server负责“提供工具并执行”
-支持两种传输模式的 MCP 客户端：
-
-- **STDIO 模式**: 通过标准输入输出与本地 MCP Server 进程通信
-- **SSE 模式**: 通过 HTTP Server-Sent Events 与远程 MCP Server 通信
-
-主要类：
-- `MCPClient` - MCP 客户端（JSON-RPC 协议）
-- `MCPToolManager` - 工具管理器
-- `MCPServiceIntegrator` - 服务集成器
-- `MCPAgentIntegration` - AI Agent 简化集成接口
-
-### 2. RAG-MCP 模块
-
-基于检索增强生成的智能工具选择：
-
-- `EmbeddingService` - 阿里百炼 DashScope 文本向量化
-- `EmbeddingCache` - LRU 缓存，减少 API 调用
-- `VectorIndex` - 向量索引，余弦相似度搜索
-- `ToolRetriever` - 工具检索器，整合以上组件
-- `ToolValidator` - 可选的工具验证
-
-### 3. MCP 服务器 (`mcp_server`)
-
-完整的 MCP 服务器实现（MIT License, by Giuseppe Mastrangelo）：
-
-- 插件化架构，支持动态加载 `.so` 插件
-- 三种传输模式：STDIO / SSE / HTTP Stream
-- 内置 6 个示例插件
-- 跨平台支持（Linux / macOS / Windows）
-
-## 依赖项
-
-| 依赖 | 用途 | 模块 |
-|------|------|------|
-| C++20 编译器 | 编译 | 全部 |
-| CMake >= 3.20 | 构建 | 全部 |
-| libcurl | HTTP/SSE 客户端 | mcp_client |
-| jsoncpp | JSON 解析 | mcp_client |
-| nlohmann/json | JSON（header-only, 已内置） | mcp_server, mcp_client(RAG) |
-| Threads | 多线程 | 全部 |
-
-## 构建
-
-```bash
-mkdir build && cd build
-cmake ..
-make -j$(nproc)
-```
-
-### 仅构建 MCP 服务器
-
-```bash
-cd mcp_server
-mkdir build && cd build
-cmake ..
-make -j$(nproc)
-```
-
-### 构建选项
-
-```bash
-# 不构建示例
-cmake -DBUILD_MCP_EXAMPLES=OFF ..
-
-# Debug 模式
-cmake -DCMAKE_BUILD_TYPE=Debug ..
+┌─────────────────────────────────────────────────────────────────┐
+│                        ToolRetriever                            │
+│  ┌─────────────────────────────────────────────────────────┐   │
+│  │                    retrieve(query)                       │   │
+│  └─────────────────────────────────────────────────────────┘   │
+│                              │                                  │
+│              ┌───────────────┼───────────────┐                 │
+│              ▼               ▼               ▼                 │
+│  ┌───────────────┐  ┌───────────────┐  ┌───────────────┐      │
+│  │EmbeddingService│  │  VectorIndex  │  │ToolValidator │      │
+│  │               │  │               │  │   (可选)      │      │
+│  │  ┌─────────┐  │  │  ┌─────────┐  │  └───────────────┘      │
+│  │  │DashScope│  │  │  │ Cosine  │  │                         │
+│  │  │  API    │  │  │  │Similarity│  │                         │
+│  │  └─────────┘  │  │  └─────────┘  │                         │
+│  │       │       │  └───────────────┘                         │
+│  │       ▼       │                                             │
+│  │  ┌─────────┐  │                                             │
+│  │  │Embedding│  │                                             │
+│  │  │ Cache   │  │                                             │
+│  │  │ (LRU)   │  │                                             │
+│  │  └─────────┘  │                                             │
+│  └───────────────┘                                             │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
 ## 快速开始
 
-### 启动 MCP 服务器
+### 1. 设置环境变量
 
 ```bash
-# STDIO 模式（默认）
-./build/mcp_server/mcp_server -p ./build/mcp_server/plugins
-
-# SSE 模式
-./build/mcp_server/mcp_server -s -p ./build/mcp_server/plugins
+export DASHSCOPE_API_KEY=sk-your-api-key
 ```
 
-### 使用 MCP 客户端
-
-```cpp
-#include "agent_rpc/mcp/mcp_client.h"
-
-using namespace agent_rpc::mcp;
-
-// STDIO 模式连接
-MCPClient client;
-client.connect("/path/to/mcp_server", {"--plugins", "./plugins"});
-
-// 列出工具
-auto tools = client.listTools();
-for (const auto& tool : tools) {
-    std::cout << tool.name << ": " << tool.description << std::endl;
-}
-
-// 调用工具
-auto response = client.callTool("calculator", R"({"expression": "2+3"})");
-std::cout << response.result << std::endl;
-
-client.disconnect();
-```
-
-### 使用 RAG-MCP 智能工具检索
+### 2. 配置 RAG-MCP
 
 ```cpp
 #include "agent_rpc/mcp/mcp_agent_integration.h"
@@ -221,121 +61,334 @@ using namespace agent_rpc::mcp;
 MCPAgentConfig config;
 config.enable_mcp = true;
 config.mcp_server_path = "/path/to/mcp_server";
+
+// RAG-MCP 配置
 config.rag_config.enabled = true;
 config.rag_config.api_key = std::getenv("DASHSCOPE_API_KEY");
+config.rag_config.model = "text-embedding-v2";
+config.rag_config.dimension = 1536;
+config.rag_config.top_k = 5;
+config.rag_config.similarity_threshold = 0.3f;
 
+// 缓存配置
+config.rag_config.enable_cache = true;
+config.rag_config.cache_max_size = 1000;
+config.rag_config.cache_ttl_seconds = 3600;
+
+// 可选: 工具验证
+config.rag_config.enable_validation = false;
+config.rag_config.validation_timeout_ms = 5000;
+```
+
+### 3. 初始化并使用
+
+```cpp
 MCPAgentIntegration mcp;
 mcp.initialize(config);
 
-// 智能检索最相关的工具
-auto tools = mcp.getRelevantTools("计算 123 + 456");
+// 获取与查询相关的工具
+std::string query = "计算 123 + 456";
+auto tools = mcp.getRelevantTools(query);
+
+for (const auto& tool : tools) {
+    std::cout << "工具: " << tool.name 
+              << ", 相关度: " << tool.relevance_score 
+              << std::endl;
+}
 
 // 获取 LLM 函数调用格式
-std::string json = mcp.getRelevantToolsAsJson("查询天气");
+std::string functions_json = mcp.getRelevantToolsAsJson(query);
 ```
 
-### 测试 MCP 服务器
+## 配置参数详解
 
-统一入口脚本，支持两种测试模式：
+### RAGMCPConfig
 
-```bash
-./test_all.sh
+| 参数 | 类型 | 默认值 | 描述 |
+|------|------|--------|------|
+| enabled | bool | false | 是否启用 RAG-MCP |
+| api_key | string | "" | DashScope API Key |
+| model | string | "text-embedding-v2" | Embedding 模型 |
+| dimension | int | 1536 | 向量维度 |
+| top_k | int | 5 | 返回工具数量 |
+| similarity_threshold | float | 0.3 | 相似度阈值 |
+| index_path | string | "" | 索引文件路径 |
+| enable_cache | bool | true | 是否启用缓存 |
+| cache_max_size | size_t | 1000 | 缓存最大条目 |
+| cache_ttl_seconds | int | 3600 | 缓存过期时间 |
+| enable_validation | bool | false | 是否启用工具验证 |
+| validation_timeout_ms | int | 5000 | 验证超时时间 |
+
+### EmbeddingConfig
+
+| 参数 | 类型 | 默认值 | 描述 |
+|------|------|--------|------|
+| api_key | string | 环境变量 | DashScope API Key |
+| model | string | "text-embedding-v2" | 模型名称 |
+| dimension | int | 1536 | 向量维度 |
+| max_retries | int | 3 | 最大重试次数 |
+| timeout_ms | int | 30000 | 请求超时 (毫秒) |
+| base_url | string | DashScope URL | API 基础 URL |
+
+### CacheConfig
+
+| 参数 | 类型 | 默认值 | 描述 |
+|------|------|--------|------|
+| enabled | bool | true | 是否启用缓存 |
+| max_size | size_t | 1000 | 最大缓存条目 |
+| ttl_seconds | int | 3600 | 过期时间 (秒) |
+
+## 核心组件
+
+### EmbeddingService
+
+负责调用 DashScope API 进行文本向量化。
+
+```cpp
+#include "agent_rpc/mcp/rag/embedding_service.h"
+
+EmbeddingConfig config;
+config.api_key = "sk-xxx";
+
+EmbeddingService service(config);
+
+// 单文本向量化
+auto result = service.embed("计算两个数的和");
+if (result.success) {
+    std::vector<float> embedding = result.embedding;
+}
+
+// 批量向量化
+std::vector<std::string> texts = {"加法", "减法", "乘法"};
+auto batch_result = service.embedBatch(texts);
 ```
 
-运行后选择模式：
+### EmbeddingCache
 
-- **模式 1 — AI 集成测试（推荐）**：使用阿里百炼 AI 模型，测试完整 Agent 工具调用链路
-- **模式 2 — 基础功能测试**：无需 API Key，仅验证 MCP Server 协议和插件
+LRU 缓存，减少重复的 API 调用。
 
-#### AI 集成测试
+```cpp
+#include "agent_rpc/mcp/rag/embedding_cache.h"
 
-使用阿里百炼 (DashScope) 大模型作为 AI Agent，通过 MCP 协议调用工具，验证完整链路：
+CacheConfig config;
+config.max_size = 1000;
+config.ttl_seconds = 3600;
 
-```
-用户查询 → Embedding 向量化 → RAG 相似度检索 → 筛选相关工具 → LLM (工具选择) → MCP Server (工具执行) → LLM (生成回答)
-```
+EmbeddingCache cache(config);
 
-**前置条件**：
+// 存入缓存
+cache.put("key", embedding_vector);
 
-- 阿里百炼 API Key（[申请地址](https://dashscope.console.aliyun.com/)）
-- Python 3.6+（无需额外依赖）
+// 获取缓存
+auto cached = cache.get("key");
+if (cached.has_value()) {
+    std::vector<float> embedding = cached.value();
+}
 
-```bash
-# 交互式运行，终端输入 API Key
-./test_all.sh
-# 选择 1
-
-# 或通过环境变量
-DASHSCOPE_API_KEY="sk-xxx" python3 test_ai_mcp.py
-
-# 指定模型
-DASHSCOPE_API_KEY="sk-xxx" DASHSCOPE_MODEL="qwen-turbo" python3 test_ai_mcp.py
+// 缓存统计
+auto stats = cache.getStats();
+std::cout << "命中率: " << stats.hit_rate << std::endl;
 ```
 
-测试覆盖项：
+### VectorIndex
 
-| 步骤 | 测试内容 |
+向量索引，支持相似度搜索。
+
+```cpp
+#include "agent_rpc/mcp/rag/vector_index.h"
+
+VectorIndex index;
+
+// 添加工具
+IndexedTool tool;
+tool.name = "calculator";
+tool.description = "计算数学表达式";
+tool.embedding = embedding_vector;
+index.addTool(tool);
+
+// 搜索
+auto results = index.search(query_embedding, top_k);
+for (const auto& result : results) {
+    std::cout << result.tool_name << ": " << result.similarity << std::endl;
+}
+
+// 持久化
+index.saveToFile("index.json");
+index.loadFromFile("index.json");
+```
+
+### ToolRetriever
+
+工具检索器，整合所有组件。
+
+```cpp
+#include "agent_rpc/mcp/rag/tool_retriever.h"
+
+RetrieverConfig config;
+config.top_k = 5;
+config.similarity_threshold = 0.3f;
+
+ToolRetriever retriever(config);
+retriever.initialize();
+
+// 索引工具
+std::vector<ToolInfo> tools = mcp_client.getAvailableTools();
+retriever.indexTools(tools);
+
+// 检索
+auto results = retriever.retrieve("计算 123 + 456");
+```
+
+### ToolValidator
+
+可选的工具验证器。
+
+```cpp
+#include "agent_rpc/mcp/rag/tool_validator.h"
+
+ToolValidator validator(mcp_client, 5000); // 5秒超时
+
+ValidationResult result = validator.validate(tool_info);
+if (result.is_valid) {
+    // 工具可用
+} else {
+    std::cout << "验证失败: " << result.error_message << std::endl;
+}
+```
+
+## 使用场景
+
+### 场景 1: 大量工具的智能选择
+
+当 MCP Server 提供数十甚至上百个工具时，RAG-MCP 可以根据用户查询自动选择最相关的工具。
+
+```cpp
+// 假设有 100 个工具
+auto all_tools = mcp.getAvailableTools();
+std::cout << "总工具数: " << all_tools.size() << std::endl;
+
+// RAG-MCP 只返回最相关的 5 个
+auto relevant = mcp.getRelevantTools("发送邮件给张三");
+std::cout << "相关工具数: " << relevant.size() << std::endl;
+```
+
+### 场景 2: LLM 函数调用
+
+将检索到的工具转换为 LLM 函数调用格式。
+
+```cpp
+std::string query = "查询北京天气";
+std::string functions = mcp.getRelevantToolsAsJson(query);
+
+// 发送给 LLM
+std::string prompt = "用户问题: " + query + "\n可用函数:\n" + functions;
+auto response = llm.chat(prompt);
+```
+
+### 场景 3: 索引持久化
+
+保存索引到文件，避免重复向量化。
+
+```cpp
+// 首次运行: 构建并保存索引
+config.rag_config.index_path = "tools_index.json";
+mcp.initialize(config);
+
+// 后续运行: 自动加载索引
+// 如果索引文件存在，会跳过向量化步骤
+```
+
+## 性能优化
+
+### 1. 启用缓存
+
+```cpp
+config.rag_config.enable_cache = true;
+config.rag_config.cache_max_size = 1000;
+```
+
+### 2. 调整 Top-K
+
+```cpp
+// 减少返回数量可以提高性能
+config.rag_config.top_k = 3;
+```
+
+### 3. 提高相似度阈值
+
+```cpp
+// 过滤掉低相关度的工具
+config.rag_config.similarity_threshold = 0.5f;
+```
+
+### 4. 禁用工具验证
+
+```cpp
+// 验证会增加延迟
+config.rag_config.enable_validation = false;
+```
+
+### 5. 使用索引持久化
+
+```cpp
+// 避免每次启动都重新向量化
+config.rag_config.index_path = "index.json";
+```
+
+## 降级机制
+
+RAG-MCP 在以下情况会自动降级：
+
+| 情况 | 降级行为 |
 |------|----------|
-| MCP 初始化 | 启动服务器，建立 STDIO 连接 |
-| 工具发现 | 获取所有插件注册的工具列表 |
-| RAG 索引构建 | 批量 Embedding 向量化所有工具，建立向量索引 |
-| RAG + AI 交互式调用 | 用户查询 → 向量相似度筛选工具 → 仅相关工具发给 LLM → MCP 执行 → 回传结果 |
-| 基础工具验证 | 直接调用 sleep、calculator、错误处理 |
+| API Key 未设置 | 返回所有可用工具 |
+| DashScope API 不可用 | 返回所有可用工具 |
+| 向量化失败 | 返回所有可用工具 |
+| 索引为空 | 返回所有可用工具 |
 
-#### 基础功能测试
-
-无需 API Key，直接验证 MCP Server 协议正确性：
-
-```bash
-./test_all.sh
-# 选择 2
+```cpp
+// 检查 RAG-MCP 是否可用
+if (mcp.isRAGAvailable()) {
+    auto tools = mcp.getRelevantTools(query);
+} else {
+    // 降级到全量工具
+    auto tools = mcp.getAvailableTools();
+}
 ```
 
-覆盖：initialize、ping、tools/list、calculator、sleep、error handling。
+## 错误处理
 
-### 使用 Python MCP Server (Windows / PyCharm)
-
-`test_ai_mcp.py` 可以改为连接仓库内的 Python MCP Server，不需要运行 Linux 构建产物。
-在 PyCharm 中为项目选择 Python 3.10 或更新版本的解释器，然后在该解释器环境安装依赖：
-
-```bash
-python -m pip install -r python_mcp_server/requirements.txt
+```cpp
+try {
+    auto tools = mcp.getRelevantTools(query);
+} catch (const EmbeddingException& e) {
+    // 向量化错误
+    std::cerr << "Embedding error: " << e.what() << std::endl;
+} catch (const IndexException& e) {
+    // 索引错误
+    std::cerr << "Index error: " << e.what() << std::endl;
+}
 ```
 
-运行 `test_ai_mcp.py` 前，在 PyCharm 的 Run Configuration 环境变量中设置 `DASHSCOPE_API_KEY`。
-`DASHSCOPE_EMBEDDING_KEY` 可单独设置；不设置时脚本会提示输入，直接回车可复用 LLM API Key。
-脚本会用当前 PyCharm 解释器启动 `python_mcp_server/server.py`，再进行工具发现、RAG 和大模型调用。
+## 监控指标
 
-#### 手动测试
+RAG-MCP 提供以下监控指标：
 
-```bash
-# 通过管道发送 JSON-RPC 请求
-echo '{"jsonrpc":"2.0","method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}},"id":"1"}' \
-  | ./build/mcp_server/mcp_server -p ./build/mcp_server/plugins -l ./build/test_logs
-```
+| 指标 | 描述 |
+|------|------|
+| rag_embedding_requests_total | 向量化请求总数 |
+| rag_embedding_latency_ms | 向量化延迟 |
+| rag_cache_hits_total | 缓存命中次数 |
+| rag_cache_misses_total | 缓存未命中次数 |
+| rag_search_latency_ms | 搜索延迟 |
+| rag_tools_retrieved | 检索到的工具数量 |
 
-#### Python MCP 客户端测试
+## 最佳实践
 
-```bash
-cd mcp_server/test
-pip install -r requirements.txt
-python3 test-client-stdio.py configuration-stdio-linux.json
-```
+1. **合理设置 Top-K**: 根据实际需求设置，通常 3-5 个足够
+2. **启用缓存**: 减少 API 调用，提高响应速度
+3. **使用索引持久化**: 避免重复向量化
+4. **监控缓存命中率**: 如果命中率低，考虑增加缓存大小
+5. **定期刷新索引**: 工具更新后需要重新索引
 
-## 开发自定义插件
 
-参见 [docs/mcp-plugin-development.md](docs/mcp-plugin-development.md)。
-
-## RAG-MCP 详细指南
-
-参见 [docs/rag-mcp-guide.md](docs/rag-mcp-guide.md)。
-
-## 协议版本
-
-- MCP Client: JSON-RPC 2.0
-- MCP Server: v0.7.0
-
-## License
-
-MCP Server 部分基于 MIT License (Copyright (C) 2025 Giuseppe Mastrangelo)。
-其余部分遵循原项目许可证。
