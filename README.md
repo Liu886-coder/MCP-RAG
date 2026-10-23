@@ -1,8 +1,50 @@
-# MCP (Model Context Protocol) 完整实现
+# MCP-RAG
 
-MCP 协议的完整 C++ 实现，包含 MCP 客户端、MCP 服务器和 RAG-MCP 智能工具检索模块。
+一个结合 MCP 与 RAG 的工具调用项目，包含 C++ MCP Client、插件式 MCP Server、语义工具检索模块，以及用于快速体验完整调用流程的 Python MCP Server 和测试客户端。
 
-从 [agent-communication](../) 项目中独立提取的子项目。
+项目的 RAG 原理、组件说明、配置示例和 C++ 使用方式以 [RAG-MCP 使用指南](docs/rag-mcp-guide.md) 为主；插件开发方式见 [MCP 插件开发指南](docs/mcp-plugin-development.md)。
+
+## 工作流程
+
+```text
+用户问题
+  → 将问题向量化
+  → 在工具向量索引中按相似度检索候选工具
+  → 把候选工具提供给 LLM 选择
+  → MCP Client 通过 MCP 协议调用 MCP Server
+  → Server 执行工具并返回结果
+  → LLM 根据结果组织回答
+```
+
+RAG 负责缩小候选工具范围；最终选择哪个候选工具由 LLM 根据用户问题和工具描述决定。Embedding 使用 DashScope API，工具相似度检索、缓存、索引持久化和降级行为详见 RAG 指南。
+
+## 主要目录
+
+- `mcp_client/`：C++ MCP 客户端、Agent 集成和 RAG 工具检索实现。
+- `mcp_server/`：C++ MCP Server、STDIO/SSE/HTTP Stream 传输及插件。
+- `python_mcp_server/`：Python MCP Server，可供 `test_ai_mcp.py` 在本地通过 STDIO 启动。
+- `test_ai_mcp.py`：连接 MCP Server、执行工具发现、RAG 检索和 LLM 工具调用的交互式测试脚本。
+- `examples/`：C++ RAG 和 Agent 集成示例。
+- `docs/`：RAG 使用和插件开发文档。
+
+## Python 快速体验
+
+在 PyCharm 选择 Python 3.10 或更新版本的解释器，并安装依赖：
+
+```bash
+python -m pip install -r python_mcp_server/requirements.txt
+```
+
+设置 `DASHSCOPE_API_KEY` 后运行 `test_ai_mcp.py`。可选设置 `DASHSCOPE_EMBEDDING_KEY`；未设置时脚本可复用 LLM API Key。脚本会启动 `python_mcp_server/server.py`，通过 MCP 获取工具列表，再进行 RAG 检索和模型工具调用。
+
+## 文档
+
+- [RAG-MCP 使用指南](docs/rag-mcp-guide.md)：RAG 架构、DashScope 配置、向量索引、缓存和降级机制。
+- [MCP 插件开发指南](docs/mcp-plugin-development.md)：C++ Server 插件开发。
+
+---
+
+以下部分记录 C++ 实现的构建和调用示例；RAG-MCP 的完整说明请优先阅读上面的使用指南。
 
 ## 项目结构
 
