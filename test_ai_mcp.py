@@ -93,6 +93,7 @@ class MCPStdioClient:
     def _is_alive(self):
         return self.proc and self.proc.poll() is None
 
+    # 最核心的函数：send();这一段是整个 Client 的心脏。向 MCP Server 发送一个 JSON-RPC 请求，然后等待 Server 返回对应的响应
     def send(self, method, params=None):
         if not self._is_alive():
             rc = self.proc.returncode if self.proc else "N/A"
@@ -276,7 +277,7 @@ class RAGToolIndex:
         self.embedding_key = embedding_key
         self.model = model
         self.tools = []        # MCP 工具定义列表
-        self.vectors = []      # 对应的向量
+        self.vectors = []      # 对应的向量,创建内存列表。build_index() 调用 Embedding API 后，用 self.vectors = call_embedding_batch(...) 把生成的工具向量放进列表
         self.dimension = 0
 
     # 把每个工具整理成一段文本，例如工具名、描述和参数名；调用 Embedding API 把这些文本变成向量。
@@ -293,6 +294,9 @@ class RAGToolIndex:
                 params = ", ".join(props.keys())
                 text += f" (参数: {params})"
             texts.append(text)
+        # 重点：将每段文本转换成一个数字向量，工具定义和向量按照相同顺序保存在内存中。
+        # self.tools[0]   → 天气工具定义，self.vectors[0] → 天气工具文本对应的向量；
+        # self.tools[1]   → 加法工具定义，self.vectors[1] → 加法工具文本对应的向量；
         self.vectors = call_embedding_batch(self.embedding_key, texts, self.model)
         if self.vectors:
             self.dimension = len(self.vectors[0])
@@ -313,7 +317,7 @@ class RAGToolIndex:
         scored.sort(key=lambda x: x[1], reverse=True)
         return scored[:top_k]
 
-
+# 把 MCP 的工具描述转换成 LLM 能理解的 Function Calling 工具描述
 def mcp_tools_to_openai_format(mcp_tools):
     """将 MCP 工具定义转换为 OpenAI function calling 格式"""
     tools = []
@@ -357,7 +361,7 @@ def run_tests(api_key, embedding_key, llm_model):
     # ------------------------------------------------------------------
     log_step(1, "启动 MCP Server")
 
-    mcp = MCPStdioClient(server_path, logs_path)  # 调取该类
+    mcp = MCPStdioClient(server_path, logs_path)  # 调取该类  要连接/启动哪个 MCP Server
     try:
         mcp.start()
     except Exception as e:
@@ -398,7 +402,7 @@ def run_tests(api_key, embedding_key, llm_model):
     rag_ok = False
 
     try:
-        count = rag_index.build_index(mcp_tools)   # 创建索引
+        count = rag_index.build_index(mcp_tools)   # 创建索引；count为生成的工具向量数量
         if count > 0:
             record("RAG 索引构建", True,
                    f"已索引 {count} 个工具, 向量维度: {rag_index.dimension}")
@@ -447,12 +451,13 @@ def run_tests(api_key, embedding_key, llm_model):
             tools_for_llm = all_openai_tools  # 默认: 全部工具   tools_for_llm 是 Python 列表，内容是工具定义
 
             if rag_ok:
+                # 这里的def retrieve很重要！！！，计算相似度的
                 retrieved = rag_index.retrieve(query, top_k=3, threshold=0.2) # RAG 把用户问题和工具描述做向量相似度比较，最多选出 3 个分数不低于 0.2 的工具
                 if retrieved:
                     log_info(f"RAG 检索结果 (相似度 >= 0.2):")
                     for t, score in retrieved:
                         log_info(f"  {score:.4f}  {t['name']}: {t.get('description', '')[:50]}")
-                    # 只把 RAG 筛选出的工具发给 LLM
+                    # 根据命中的工具名，取出 LLM 格式的完整工具定义
                     retrieved_names = {t["name"] for t, _ in retrieved}
                     tools_for_llm = [t for t in all_openai_tools
                                      if t["function"]["name"] in retrieved_names]
@@ -467,7 +472,8 @@ def run_tests(api_key, embedding_key, llm_model):
                 {"role": "system", "content": "你是一个智能助手，可以使用提供的工具来回答用户问题。当需要使用工具时，请调用对应的工具。"},
                 {"role": "user", "content": query},
             ]
-            llm_resp = call_llm(api_key, llm_model, messages, tools_for_llm)
+            # 这一块负责筛选并准备要交给 LLM 的工具列表；注意注意注意：：：tools_for_llm 就是命中的候选工具定义列表
+            llm_resp = call_llm(api_key, llm_model, messages, tools_for_llm)  # 第一次调用 LLM，把用户问题和候选工具列表发给它，让它决定怎么回答、是否调用工具
 
             choice = llm_resp.get("choices", [{}])[0]
             message = choice.get("message", {})
@@ -518,7 +524,7 @@ def run_tests(api_key, embedding_key, llm_model):
                 "content": tool_output,
             })
 
-            final_resp = call_llm(api_key, llm_model, messages)
+            final_resp = call_llm(api_key, llm_model, messages)         # 再次调用 LLM，生成最终回答
             final_msg = final_resp.get("choices", [{}])[0].get("message", {}).get("content", "")
 
             log_info(f"AI 最终回答: {final_msg[:300]}")
